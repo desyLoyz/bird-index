@@ -1,24 +1,20 @@
 #!/usr/bin/env python3
 """
-Laubmann General Index Parser
-==============================
-Parses the ornithological index pages from the Laubmann diary JSON,
-rectifying inconsistent reference notation into a clean structured table.
+Laubmann General Index Parser  –  v3
+======================================
+Produces a clean, one-row-per-species table:
 
-Output columns:
-  Bird name (German, edited) | Original name (if different) | Family (Latin) | References (rectified)
+  Bird Name (German, edited) | Original Name (if different) | Family (Latin) | References (rectified)
 
-No AI technologies used — pure regex + rule-based text processing.
-Auto-installs missing dependencies on first run.
+
+No AI technologies used. Auto-installs missing dependencies.
 """
 
 import subprocess, sys
-
-def _ensure(pkg, import_name=None):
-    try:
-        __import__(import_name or pkg)
+def _ensure(pkg, imp=None):
+    try: __import__(imp or pkg)
     except ImportError:
-        print(f"Installing {pkg} ...")
+        print(f"Installing {pkg} …")
         subprocess.check_call([sys.executable, "-m", "pip", "install", pkg, "-q"])
 
 _ensure("pandas")
@@ -29,334 +25,284 @@ import json, re
 from pathlib import Path
 import pandas as pd
 
-# ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ── CONFIGURATION ─────────────────────────────────────────────────────────────
 JSON_PATH    = "Laubmann_35_gemini_edits-170.json"
-OUTPUT_EXCEL = "laubmann_index.xlsx"
-OUTPUT_CSV   = "laubmann_index.csv"
+CSV_PATH     = "laubmann_index.csv"          # existing CSV to compare against
+OUTPUT_EXCEL = "laubmann_index_v3.xlsx"
+OUTPUT_CSV   = "laubmann_index_v3.csv"
+INDEX_START  = "2d6d52f0-b55f-431d-81ac-e2b8ce255fb2_0004_R"
 
-# Page key from which the index begins (inclusive)
-INDEX_START_PAGE = "2d6d52f0-b55f-431d-81ac-e2b8ce255fb2_0004_R"
+# Roman numerals longest-first so regex is greedy
+ROMAN_LIST = [
+    "XXXV","XXXIV","XXXIII","XXXII","XXXI","XXX",
+    "XXIX","XXVIII","XXVII","XXVI","XXV","XXIV",
+    "XXIII","XXII","XXI","XX","XIX","XVIII","XVII",
+    "XVI","XV","XIV","XIII","XII","XI","X",
+    "IX","VIII","VII","VI","V","IV","III","II","I"
+]
+ROMAN_PAT = "|".join(ROMAN_LIST)
 
-# Roman numeral map (I–XXXV)
-ROMAN = {
-    "I":1,"II":2,"III":3,"IV":4,"V":5,"VI":6,"VII":7,"VIII":8,
-    "IX":9,"X":10,"XI":11,"XII":12,"XIII":13,"XIV":14,"XV":15,
-    "XVI":16,"XVII":17,"XVIII":18,"XIX":19,"XX":20,"XXI":21,
-    "XXII":22,"XXIII":23,"XXIV":24,"XXV":25,"XXVI":26,"XXVII":27,
-    "XXVIII":28,"XXIX":29,"XXX":30,"XXXI":31,"XXXII":32,"XXXIII":33,
-    "XXXIV":34,"XXXV":35,
-}
-# Sorted longest-first so regex matches greedily
-ROMAN_PATTERN = "|".join(sorted(ROMAN.keys(), key=len, reverse=True))
+ROMAN_TO_INT = {r: i+1 for i, r in enumerate(reversed(ROMAN_LIST))}
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 1 — TEXT CLEANING HELPERS
-# ─────────────────────────────────────────────────────────────────────────────
+# ── TEXT CLEANING ─────────────────────────────────────────────────────────────
 
-def strip_all_tags(text: str) -> str:
-    """Remove ALL HTML tags (including <font color=...>, <u>, etc.)."""
-    return re.sub(r"<[^>]+>", "", text)
+def strip_tags(t):
+    return re.sub(r'<[^>]+>', '', t)
 
-def clean_page_text(text: str) -> str:
+def strip_strikethrough(t):
+    """Remove ~~struck-through~~ content."""
+    return re.sub(r'~~[^~]*~~', '', t)
+
+def clean(t):
+    t = strip_strikethrough(t)
+    t = strip_tags(t)
+    t = re.sub(r'^#[^\n]*\n?', '', t, flags=re.MULTILINE)   # markdown headings
+    t = re.sub(r'^\s*-\s', '',   t, flags=re.MULTILINE)      # list dashes
+    return t
+
+# ── FAMILY HEADER DETECTION ───────────────────────────────────────────────────
+
+def extract_family(text):
     """
-    Full cleaning pipeline for a single page's edited text:
-      1. Remove HTML tags
-      2. Remove markdown headings (# ...)
-      3. Remove leading list markers (- at line start)
-      4. Remove stray artefacts: {Stempel:}, [?], p. before page numbers
-      5. Normalise whitespace
+    A family header is a line containing ONLY a Latin name (1–2 capitalised
+    words, no digits, no colon, length > 4 chars).
     """
-    text = strip_all_tags(text)
-    # Remove markdown heading lines
-    text = re.sub(r"^\s*#[^\n]*\n?", "", text, flags=re.MULTILINE)
-    # Remove leading list dashes
-    text = re.sub(r"^\s*-\s+", "", text, flags=re.MULTILINE)
-    # Remove annotation artefacts
-    text = re.sub(r"\{[^}]*\}", "", text)        # {Stempel:} etc.
-    text = re.sub(r"\[\??\]", "", text)           # [?] or []
-    text = re.sub(r"\bp\.\s*(?=\d)", "", text)    # "p. 169" → "169"
-    # Collapse multiple blank lines
-    text = re.sub(r"\n{3,}", "\n\n", text)
-    return text.strip()
+    for line in text.splitlines():
+        s = line.strip().rstrip('.')
+        if re.fullmatch(r'[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{3,})?', s):
+            return s
+    return None
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 2 — FAMILY HEADER DETECTION
-# ─────────────────────────────────────────────────────────────────────────────
+# ── REFERENCE RECTIFICATION ───────────────────────────────────────────────────
 
-# A family header is a Latin name (capitalised, may contain spaces) followed
-# by an optional dot, standing alone on a line (possibly with trailing punct).
-# Examples: "Corvidae.", "Fringillidae", "Alaudidae."
-FAMILY_RE = re.compile(
-    r"^\s*([A-Z][a-z]+(?:\s+[A-Z][a-z]+)*)\s*\.\s*$",
-    re.MULTILINE
-)
-
-def extract_family_from_page(text: str) -> str | None:
-    """Return the first Latin family name found on the page, or None."""
-    m = FAMILY_RE.search(text)
-    return m.group(1).strip() if m else None
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 3 — REFERENCE STRING RECTIFICATION
-# ─────────────────────────────────────────────────────────────────────────────
-
-def rectify_references(raw_refs: str) -> str:
+def rectify(raw):
     """
-    Convert a messy reference string into canonical "VOL, PAGE; VOL, PAGE; …"
-    format.
-
-    Handles:
-      • Dots used as separators instead of semicolons  (I, 153. II, 161)
-      • Missing comma between volume and page          (I 153)
-      • Stray characters: 'l', trailing punctuation
-      • Line-wrapped references (newlines inside a ref block)
-      • Comma used as separator instead of semicolon   (XXI, 170, XXII, 171)
-      • Malformed page numbers like 19[?] → kept as-is with note
+    Normalise any messy reference string to canonical 'VOL, PAGE; VOL, PAGE; …'
+    Handles: dot-as-separator, missing comma, comma-as-separator,
+             stray OCR letters, line-breaks, trailing punctuation.
     """
-    # Flatten newlines within the reference block
-    s = re.sub(r"\s*\n\s*", " ", raw_refs).strip()
+    s = re.sub(r'\s*\n\s*', ' ', raw).strip()
 
-    # Remove stray single letters that are OCR noise (e.g. ";l XVI" → "; XVI")
-    s = re.sub(r"(?<=\d)\s*[a-km-z]\s+(?=[IVXLCDM])", " ", s)
+    # Remove stray single lowercase letters between refs (OCR noise)
+    s = re.sub(r'(?<=\d)\s+[a-km-wyz]\s+(?=' + ROMAN_PAT + r')', ' ', s)
 
-    # Normalise all separators between references to " ; "
-    # A new reference starts when we see a Roman numeral after a separator
-    # Strategy: tokenise into (volume, page) pairs, then reassemble.
-
-    # First, unify dots-as-separators: replace ". ROMAN" with "; ROMAN"
-    # but only when the dot follows a page number (digits)
+    # dot-as-separator: digit . ROMAN  →  digit ; ROMAN
     s = re.sub(
-        r"(\d)\s*[.]\s*(?=(?:" + ROMAN_PATTERN + r")(?:\s*,|\s+\d))",
-        r"\1; ",
-        s
-    )
+        r'(\d)\s*\.\s*(?=(?:' + ROMAN_PAT + r')(?:\s*[,;]|\s+\d))',
+        r'\1; ', s)
 
-    # Replace comma-as-separator between two references:
-    # pattern: digit , ROMAN  →  digit ; ROMAN
+    # comma-as-separator: digit , ROMAN  →  digit ; ROMAN
     s = re.sub(
-        r"(\d)\s*,\s*(?=(?:" + ROMAN_PATTERN + r")(?:\s*[,;]|\s+\d))",
-        r"\1; ",
-        s
-    )
+        r'(\d)\s*,\s*(?=(?:' + ROMAN_PAT + r')(?:\s*[,;]|\s+\d))',
+        r'\1; ', s)
 
-    # Ensure volume and page are separated by ", " (handle missing comma)
-    s = re.sub(
-        r"(?<!\d)(" + ROMAN_PATTERN + r")\s+(\d)",
-        r"\1, \2",
-        s
-    )
+    # missing comma: ROMAN<space>digit  →  ROMAN, digit
+    s = re.sub(r'(' + ROMAN_PAT + r')\s+(\d)', r'\1, \2', s)
 
-    # Remove the species-name separator at the very start (": " or ".- " etc.)
-    s = re.sub(r"^[\s:.\-]+", "", s)
+    # strip leading junk
+    s = re.sub(r'^[\s;:,.\-]+', '', s)
 
-    # Normalise multiple spaces / semicolons
-    s = re.sub(r";\s*;", ";", s)
-    s = re.sub(r"\s{2,}", " ", s)
-    s = re.sub(r";\s*$", "", s).strip()
-
-    # Final pass: ensure every ";" is followed by exactly one space
-    s = re.sub(r"\s*;\s*", "; ", s)
-
+    # normalise semicolons and trailing
+    s = re.sub(r'\s*;\s*', '; ', s)
+    s = re.sub(r'[;,.\s]+$', '', s).strip()
     return s
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 4 — SPECIES ENTRY DETECTION & PARSING
-# ─────────────────────────────────────────────────────────────────────────────
+# ── REASSEMBLE WRAPPED LINES ──────────────────────────────────────────────────
 
-# A species entry looks like:
-#   <BirdName>[optional colon or dot or dash]: <references>
-# The name may contain letters, spaces, brackets ([x]), dots (Sib.)
-# The separator between name and refs can be:  ":  "  ".-"  ". "  ":"
-# References always contain at least one Roman numeral followed by a number.
-
-SPECIES_ENTRY_RE = re.compile(
-    # Bird name: starts at line start (after optional whitespace),
-    # must begin with uppercase, may contain word chars, spaces, brackets, dots
-    r"^((?:[A-ZÄÖÜ\[])[^\n:]{1,60}?)"
-    # Separator: colon, dot-dash, dot, or just whitespace before Roman numeral
-    r"\s*[:.\-]+\s*"
-    # Reference block: everything until a blank line or end of string
-    r"((?:(?:" + ROMAN_PATTERN + r")[\s,;.\d\[\]?lI]+)+)",
-    re.MULTILINE
-)
-
-# Alternative: name ends with ":" on same line, refs may span multiple lines
-SPECIES_BLOCK_RE = re.compile(
-    r"^((?:[A-ZÄÖÜ][^\n:]{1,60}?))\s*:+\s*\n?"
-    r"((?:.+\n?)+?)(?=\n\n|\Z|^[A-ZÄÖÜ][^\n:]{1,60}?\s*:)",
-    re.MULTILINE
-)
-
-def parse_species_entries(text: str):
+def reassemble(text):
     """
-    Extract all (bird_name, raw_references) pairs from a cleaned page text.
-    Returns list of (name_raw, refs_raw) tuples.
+    Join lines that are continuations of a reference list.
+    A continuation line starts with a Roman numeral or a bare digit.
+    """
+    lines  = text.splitlines()
+    result = []
+    for line in lines:
+        s = line.strip()
+        if not s:
+            result.append('')
+            continue
+        is_cont = bool(
+            re.match(r'^(?:' + ROMAN_PAT + r')\s*[,\s]', s) or
+            re.match(r'^\d', s)
+        )
+        if is_cont and result and result[-1]:
+            result[-1] = result[-1].rstrip() + ' ' + s
+        else:
+            result.append(s)
+    return '\n'.join(result)
+
+# ── SPECIES ENTRY EXTRACTION ──────────────────────────────────────────────────
+
+SPECIES_RE = re.compile(
+    # Name: 1–70 chars starting with uppercase (German, may contain spaces,
+    #        brackets, dots as in "Sib. Tannenhäher")
+    r'^((?:[A-ZÄÖÜ\[][^:\n]{1,70}?))\s*:+\s*'
+    # Refs: one or more Roman+page tokens
+    r'((?:(?:' + ROMAN_PAT + r')\s*,?\s*\d[\d\s,;.\[\]?]*)+)',
+    re.MULTILINE
+)
+
+def is_family_header(name):
+    return bool(re.fullmatch(r'[A-Z][a-z]{3,}(?:\s+[A-Z][a-z]{3,})?', name))
+
+def parse_entries(text):
+    """
+    Return list of (name, refs_raw) from a cleaned, reassembled page text.
     """
     entries = []
-    seen_spans = []
-
-    # Primary strategy: find "Name: refs" patterns where refs contain Roman nums
-    ref_block_re = re.compile(
-        r"^((?:[A-ZÄÖÜ\[][^\n:]{1,60}?))\s*[:.\-]+\s*"
-        r"((?:(?:" + ROMAN_PATTERN + r")\s*,\s*\d[^\n]*(?:\n(?![ \t]*\n)[^\n]+)*?))"
-        r"(?=\n\n|\n(?:[A-ZÄÖÜ\[]|\Z)|\Z)",
-        re.MULTILINE
-    )
-
-    for m in ref_block_re.finditer(text):
-        name = m.group(1).strip()
+    for m in SPECIES_RE.finditer(text):
+        name = m.group(1).strip().rstrip(':. -')
         refs = m.group(2).strip()
-        # Skip if this looks like a family header (single Latin word + dot)
-        if re.fullmatch(r"[A-Z][a-z]+", name):
+        if is_family_header(name) or len(name) < 3:
             continue
-        entries.append((name, refs, m.start()))
-        seen_spans.append((m.start(), m.end()))
-
+        entries.append((name, refs))
     return entries
 
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 5 — NAME NORMALISATION
-# ─────────────────────────────────────────────────────────────────────────────
+# ── ORIGINAL-NAME LOOKUP ──────────────────────────────────────────────────────
 
-# Known aliases / original names that differ from the edited heading
-# (e.g. "Hausmeister" is the original name on the page for "Haussperling")
-KNOWN_ALIASES = {
-    "Hausmeister": "Haussperling (Hausmeister)",
-}
-
-def normalise_name(raw: str):
+def original_name_for(orig_text, edited_name):
     """
-    Clean a raw bird name string.
-    Returns (edited_name, original_name_if_different).
+    Find the species name in the *original* text that sits at the same
+    structural position as edited_name.
+    Strategy: collect all species names from original; if exactly one differs
+    from edited_name and the refs overlap, that is the original name.
+    Returns '' if original name == edited name (no change needed).
     """
-    # Remove trailing colons, dots, dashes
-    name = re.sub(r"[\s:.\-]+$", "", raw).strip()
-    # Remove double colons
-    name = re.sub(r":+", "", name).strip()
+    orig_entries = parse_entries(reassemble(orig_text))
+    orig_names = [n for n, _ in orig_entries
+                  if not is_family_header(n) and len(n) >= 3]
+    # Direct lookup first
+    if edited_name in orig_names:
+        return ''   # same name in original
+    # Return first name that differs (single-entry pages)
+    if len(orig_names) == 1 and orig_names[0] != edited_name:
+        return orig_names[0]
+    # Multi-entry page: try to match by refs similarity
+    edited_vols = set(re.findall(ROMAN_PAT,
+                                 next((r for n,r in
+                                       parse_entries(reassemble(orig_text))
+                                       if n == edited_name), '')))
+    best, best_score = '', 0
+    for n, r in orig_entries:
+        if n == edited_name:
+            continue
+        vols = set(re.findall(ROMAN_PAT, r))
+        score = len(edited_vols & vols)
+        if score > best_score:
+            best, best_score = n, score
+    return best if best_score > 0 else ''
 
-    original = None
-    if name in KNOWN_ALIASES:
-        original = name
-        name = KNOWN_ALIASES[name]
-
-    return name, original
-
-# ─────────────────────────────────────────────────────────────────────────────
-# STEP 6 — MAIN PIPELINE
-# ─────────────────────────────────────────────────────────────────────────────
+# ── MAIN PIPELINE ─────────────────────────────────────────────────────────────
 
 def main():
     json_file = Path(JSON_PATH)
     if not json_file.exists():
         raise FileNotFoundError(
-            f"'{JSON_PATH}' not found.\n"
-            "Place the JSON file in the same folder as this script."
-        )
+            f"'{JSON_PATH}' not found. Place it in the same folder as this script.")
 
-    with open(json_file, encoding="utf-8") as fh:
+    with open(json_file, encoding='utf-8') as fh:
         data = json.load(fh)
 
-    # Collect ordered page keys (excluding metadata keys)
-    all_page_keys = [k for k in data.keys() if not k.startswith("_")]
-
-    # Find start index
+    all_keys   = [k for k in data if not k.startswith('_')]
     try:
-        start_idx = all_page_keys.index(INDEX_START_PAGE)
+        start_idx  = all_keys.index(INDEX_START)
     except ValueError:
-        print(f"Warning: start page '{INDEX_START_PAGE}' not found. "
-              "Processing all pages.")
+        print(f"Warning: start key not found, processing all pages.")
         start_idx = 0
+    index_keys = all_keys[start_idx:]
+    print(f"Processing {len(index_keys)} index pages …")
 
-    index_pages = all_page_keys[start_idx:]
-    print(f"Processing {len(index_pages)} index pages …")
-
-    # ── Pass 1: collect all pages, track current family ──────────────────────
-    records = []
+    # ── Pass 1: extract all raw records ──────────────────────────────────────
+    raw_records = []
     current_family = None
-    skipped_names  = []
 
-    for page_key in index_pages:
-        entry = data.get(page_key, {})
-        raw_text = entry.get("edited") or entry.get("original", "")
-        if not raw_text:
-            continue
+    for pk in index_keys:
+        entry = data[pk]
+        edited_raw   = entry.get('edited',   '')
+        original_raw = entry.get('original', '')
 
-        cleaned = clean_page_text(raw_text)
+        edited_clean   = clean(edited_raw)
+        original_clean = clean(original_raw)
 
-        # Update family if this page has a header
-        page_family = extract_family_from_page(cleaned)
-        if page_family:
-            current_family = page_family
+        # Update family
+        fam = extract_family(edited_clean)
+        if fam:
+            current_family = fam
 
-        # Extract species entries
-        species_entries = parse_species_entries(cleaned)
+        # Reassemble wrapped lines, then extract entries
+        edited_asm   = reassemble(edited_clean)
+        original_asm = reassemble(original_clean)
 
-        for (name_raw, refs_raw, _pos) in species_entries:
-            name_edited, name_original = normalise_name(name_raw)
+        for name_e, refs_e in parse_entries(edited_asm):
+            name_o = original_name_for(original_asm, name_e)
 
-            # Skip empty or suspiciously short names
-            if len(name_edited) < 3:
-                skipped_names.append((page_key, name_raw))
-                continue
-
-            refs_clean = rectify_references(refs_raw)
-
-            records.append({
-                "Bird Name (German)"  : name_edited,
-                "Original Name"       : name_original or "",
-                "Family (Latin)"      : current_family or "",
-                "References"          : refs_clean,
-                "Source Page"         : page_key,
+            raw_records.append({
+                'Bird Name (German)' : name_e,
+                'Original Name'      : name_o,
+                'Family (Latin)'     : current_family or '',
+                'References'         : rectify(refs_e),
+                '_page'              : pk,
             })
 
-    # ── Build DataFrame ───────────────────────────────────────────────────────
-    df = pd.DataFrame(records, columns=[
-        "Bird Name (German)", "Original Name", "Family (Latin)",
-        "References", "Source Page"
-    ])
+    print(f"Raw entries before dedup: {len(raw_records)}")
 
-    # De-duplicate: if the same bird appears on multiple pages (line-wrapped),
-    # merge their references
+    # ── Pass 2: merge duplicate entries (same name + family, split across pages)
+    df_raw = pd.DataFrame(raw_records)
+
     def merge_refs(series):
-        combined = "; ".join(s for s in series if s)
-        # Re-rectify the merged string to remove duplicate separators
-        return rectify_references(combined)
+        """Merge and re-rectify reference strings, removing duplicates."""
+        combined = '; '.join(s for s in series if s)
+        # Parse all vol,page pairs, deduplicate, sort by volume number
+        pairs = re.findall(r'(' + ROMAN_PAT + r'),\s*(\d+)', combined)
+        seen  = {}
+        for vol, page in pairs:
+            if vol not in seen:
+                seen[vol] = page
+        sorted_pairs = sorted(seen.items(), key=lambda x: ROMAN_TO_INT.get(x[0], 99))
+        return '; '.join(f'{v}, {p}' for v, p in sorted_pairs)
 
-    df_merged = (
-        df.groupby(["Bird Name (German)", "Original Name", "Family (Latin)"],
-                   sort=False, as_index=False)
-          .agg({"References": merge_refs, "Source Page": lambda s: ", ".join(s.unique())})
+    def first_nonempty(series):
+        for v in series:
+            if v: return v
+        return ''
+
+    df = (
+        df_raw
+        .groupby(['Bird Name (German)', 'Family (Latin)'], sort=False, as_index=False)
+        .agg({
+            'Original Name' : first_nonempty,
+            'References'    : merge_refs,
+            '_page'         : lambda s: ', '.join(s.unique()),
+        })
+        .rename(columns={'_page': 'Source Page(s)'})
     )
 
-    # Sort by family, then bird name
-    df_merged = df_merged.sort_values(
-        ["Family (Latin)", "Bird Name (German)"]
-    ).reset_index(drop=True)
+    # Sort by family then name
+    df = df.sort_values(['Family (Latin)', 'Bird Name (German)']).reset_index(drop=True)
+    df.index += 1  # 1-based index
 
-    # ── Print preview ─────────────────────────────────────────────────────────
-    print(f"\nTotal species entries parsed: {len(df_merged)}\n")
-    pd.set_option("display.max_colwidth", 80)
-    pd.set_option("display.max_rows", 200)
-    print(df_merged[["Bird Name (German)", "Original Name",
-                      "Family (Latin)", "References"]].to_string(index=True))
+    print(f"Unique species entries: {len(df)}\n")
+    pd.set_option('display.max_colwidth', 90)
+    print(df[['Bird Name (German)', 'Original Name',
+              'Family (Latin)', 'References']].to_string())
 
-    if skipped_names:
-        print(f"\n[!] {len(skipped_names)} entries skipped (name too short):")
-        for pk, nm in skipped_names[:10]:
-            print(f"    page={pk}  name={repr(nm)}")
 
     # ── Export ────────────────────────────────────────────────────────────────
-    with pd.ExcelWriter(OUTPUT_EXCEL, engine="openpyxl") as writer:
-        df_merged.to_excel(writer, sheet_name="Species Index", index=True)
-        # Also export raw (pre-merge) for debugging
-        df.to_excel(writer, sheet_name="Raw Entries", index=False)
+    with pd.ExcelWriter(OUTPUT_EXCEL, engine='openpyxl') as writer:
+        df[['Bird Name (German)', 'Original Name',
+            'Family (Latin)', 'References',
+            'Source Page(s)']].to_excel(writer, sheet_name='Species Index', index=True)
 
-    df_merged.to_csv(OUTPUT_CSV, index=True, encoding="utf-8-sig")
+
+        df_raw.rename(columns={'_page':'Source Page'}).to_excel(
+            writer, sheet_name='Raw Entries', index=False)
+
+    df[['Bird Name (German)', 'Original Name',
+        'Family (Latin)', 'References']].to_csv(
+        OUTPUT_CSV, index=True, encoding='utf-8-sig')
 
     print(f"\n✓  Excel  →  {OUTPUT_EXCEL}")
     print(f"✓  CSV    →  {OUTPUT_CSV}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
     main()
