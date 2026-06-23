@@ -1,0 +1,1 @@
+# This script converts the json of the index (Volume 35) to a clean CSV and Excel sheet.
