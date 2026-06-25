@@ -27,9 +27,9 @@ from pathlib import Path
 import pandas as pd
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
-JSON_PATH    = "Laubmann_35_gemini_edits-170.json"
-OUTPUT_EXCEL = "laubmann_index_v7.xlsx"
-OUTPUT_CSV   = "laubmann_index_v7.csv"
+JSON_PATH    = "Laubmann_35_gemini_edits-new-100.json"
+OUTPUT_EXCEL = "laubmann_index_v9.xlsx"
+OUTPUT_CSV   = "laubmann_index_v9.csv"
 INDEX_START  = "2d6d52f0-b55f-431d-81ac-e2b8ce255fb2_0004_R"
 
 ROMAN_LIST = [
@@ -109,6 +109,7 @@ def parse_entries_from_pairs(pairs):
     
     Page numbers are in after_text: e.g. tag='I', after=', 153; '
     So for each Roman numeral tag, the page is the first number in after_text.
+    
     """
     entries = []
     i = 0
