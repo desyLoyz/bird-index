@@ -10,8 +10,12 @@ Fixes gegenüber v6:
 - is_family() prüft NUR gegen die explizite Whitelist (kein Regex-Overmatch)
 - Seitenzahlen werden aus dem Text ZWISCHEN den <u>-Tags extrahiert
 - Malformed tags (<u>Text,/u>) werden korrekt behandelt
+- Zusätzliche malformed Closings wie <u>Text<./u> werden robust erkannt
 - Bullet-Zeichen vor Tags werden ignoriert
 - <u>Garten u. Waldbaumläufer</u> wird als ein Token erkannt
+- Inline-Referenzen nach Namen werden erkannt (z.B. <u>Name:</u> I, 161; II, 164)
+- Abschließende Doppelpunkte in Artnamen werden entfernt (Haubenlerche: -> Haubenlerche)
+- Optionaler JSON-Dateipfad per CLI-Argument wird unterstützt
 - Original Name wird IMMER befüllt (auch wenn identisch mit edited)
 """
 
@@ -70,8 +74,12 @@ def extract_tag_pairs(raw):
     Also handles malformed <u>TEXT,/u> tags.
     """
     pairs = []
-    # Match both well-formed and malformed closing tags
-    pattern = re.compile(r'<u>(.*?)(?:</u>|,?/u>)', re.DOTALL)
+    # Match well-formed and common malformed closing tags, but never span into
+    # the next tag (prevents swallowing entries after broken markup like <./u>).
+    pattern = re.compile(
+        r'<u>\s*([^<]*?)\s*(?:</u>|<\./u>|,?/u>|<,/u>)',
+        re.DOTALL
+    )
     last_end = 0
     for m in pattern.finditer(raw):
         tag_text = m.group(1).strip()
@@ -102,6 +110,10 @@ def is_name_token(t):
     if len(t) < 2: return False
     return True
 
+def normalize_name_token(t):
+    """Remove trailing punctuation artifacts from extracted names."""
+    return t.strip().rstrip(':').strip()
+
 # ── ENTRY PARSING FROM TAG PAIRS ─────────────────────────────────────────────
 def parse_entries_from_pairs(pairs):
     """
@@ -125,15 +137,19 @@ def parse_entries_from_pairs(pairs):
             continue
 
         if is_name_token(tag):
+            # Some pages store refs directly in plain text after the name tag:
+            # <u>Name:</u> I, 161; II, 164; ...
+            refs_inline = re.findall(r'\b(' + ROMAN_PAT + r')\s*,?\s*(\d+)\b', after)
+
             # Look ahead: is there a Roman numeral within next 3 tags?
             lookahead_tags = [pairs[j][0] for j in range(i+1, min(i+4, n))]
-            if not any(is_roman(t) for t in lookahead_tags):
+            if not refs_inline and not any(is_roman(t) for t in lookahead_tags):
                 i += 1
                 continue
 
-            name = tag
+            name = normalize_name_token(tag)
             i += 1
-            ref_pairs = []
+            ref_pairs = list(refs_inline)
 
             while i < n:
                 t, a = pairs[i]
@@ -200,9 +216,9 @@ def first_nonempty(series):
 
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
-    json_file = Path(JSON_PATH)
+    json_file = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(JSON_PATH)
     if not json_file.exists():
-        raise FileNotFoundError(f"'{JSON_PATH}' nicht gefunden.")
+        raise FileNotFoundError(f"'{json_file}' nicht gefunden.")
 
     with open(json_file, encoding='utf-8') as fh:
         data = json.load(fh)
