@@ -167,9 +167,11 @@ def parse_entries_from_pairs(pairs):
                     break
 
                 elif is_name_token(t):
-                    # New entry starts if followed by Roman numeral
+                    # New entry starts if it has inline refs itself
+                    # or is followed by a Roman numeral tag.
+                    t_inline_refs = re.findall(r'\b(' + ROMAN_PAT + r')\s*,?\s*(\d+)\b', a)
                     la2 = [pairs[j][0] for j in range(i+1, min(i+4, n))]
-                    if any(is_roman(x) for x in la2):
+                    if t_inline_refs or any(is_roman(x) for x in la2):
                         break
                     else:
                         i += 1  # noise token, skip
