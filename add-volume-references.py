@@ -9,12 +9,12 @@ from difflib import SequenceMatcher
 # =========================
 # KONFIG
 # =========================
-EXCEL_IN = "laubmann_index_v9_nomenclator.xlsx"
+EXCEL_IN = "laubmann_index_v10-corr_nomenclator.xlsx"
 SHEET_NAME = "Species Index"
 CORPUS_MD = "corpus.md"
 
-EXCEL_OUT = "laubmann_index_v9_with_all_corpus_hits.xlsx"
-CSV_OUT = "laubmann_index_v9_with_all_corpus_hits.csv"
+EXCEL_OUT = Path(EXCEL_IN).with_name(Path(EXCEL_IN).stem + "_with_all_corpus_hits.xlsx")
+CSV_OUT = Path(EXCEL_IN).with_name(Path(EXCEL_IN).stem + "_with_all_corpus_hits.csv")
 
 FUZZY_THRESHOLD = 0.78
 INITIAL_HIT_COLS = 20
