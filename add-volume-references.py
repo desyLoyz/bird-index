@@ -9,7 +9,7 @@ from difflib import SequenceMatcher
 # =========================
 # KONFIG
 # =========================
-EXCEL_IN = "laubmann_index_v10-corr_nomenclator.xlsx"
+EXCEL_IN = "laubmann_index_v12_nomenclator.xlsx"
 SHEET_NAME = "Species Index"
 CORPUS_MD = "corpus.md"
 

@@ -10,8 +10,8 @@ Aktuelle Merkmale:
 - Fokus auf das korrigierte `Species Index`-Blatt
 - Familienprüfung als zusätzliches Matching-Kriterium
 - Eigene Spalte `Family Match (Source/Nomenclator)` zur Qualitätskontrolle
-- Originaleinträge bleiben unverändert; zusätzlich werden die Rohdaten als
-  `Raw Entries` mit ausgegeben
+- Matching und Ausgabe basieren auf `Bird Name (German)`; zusätzliche Rohdaten
+  werden als `Raw Entries` mit ausgegeben
 """
 
 import subprocess, sys
@@ -29,7 +29,7 @@ from rapidfuzz import process, fuzz
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 # Standardpfad für die korrigierte XLS-Datei. Das Skript akzeptiert aber auch
 # einen Dateinamen per CLI und verarbeitet automatisch .xls sowie .xlsx.
-DEFAULT_EXCEL_IN = "laubmann_index_v10-corr.xls"
+DEFAULT_EXCEL_IN = "laubmann_index_v12.xls"
 FTS_PATH         = "fts.txt"
 MATCH_THRESHOLD  = 70
 
@@ -335,6 +335,9 @@ def main():
             unmatched.append(bird)
 
     df_species.insert(0, 'Nr. (Nomenclator)', nums)
+    # Für Matching und Ausgabeblätter wird ausschließlich der bereinigte Name
+    # aus `Bird Name (German)` verwendet.
+    df_species = df_species.drop(columns=['Original Name'], errors='ignore')
     df_species['Wissenschaftlicher Name'] = sci_names
     df_species['Dt. Name (Nomenclator)']  = dt_names_nom
     df_species['Autor & Jahr']            = author_years
@@ -352,7 +355,6 @@ def main():
     col_order = [
         'Nr. (Nomenclator)',
         'Bird Name (German)',
-        'Original Name',
         'Family (Latin)',
         'Family Match (Source/Nomenclator)',
         'Wissenschaftlicher Name',

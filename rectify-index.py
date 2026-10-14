@@ -1,7 +1,12 @@
 #!/usr/bin/env python3
 """
-Laubmann General Index Parser  –  v7
+Laubmann General Index Parser  –  v12
 =====================================
+
+fixes for v12
+Gattungsliste erweitert nach erneutem Proofreading Laubmann_35_gemin_edits_last.json
+
+fixes for v7
 Kernstrategie: Arbeite DIREKT auf dem <u>-Token-Stream.
 Jeder bedeutsame Begriff (Name, Bandnummer, Familienname) ist in <u>...</u>
 eingeschlossen. Die Seitenzahlen stehen AUSSERHALB der Tags (als plain text).
@@ -16,6 +21,8 @@ Fixes gegenüber v6:
 - Inline-Referenzen nach Namen werden erkannt (z.B. <u>Name:</u> I, 161; II, 164)
 - Abschließende Doppelpunkte in Artnamen werden entfernt (Haubenlerche: -> Haubenlerche)
 - Optionaler JSON-Dateipfad per CLI-Argument wird unterstützt
+- Seiten werden in Lesereihenfolge verarbeitet (R vor L)
+- Endausgabe bleibt in Reihenfolge des ersten Auftretens (keine alphabetische Umsortierung)
 - Original Name wird IMMER befüllt (auch wenn identisch mit edited)
 """
 
@@ -31,9 +38,9 @@ from pathlib import Path
 import pandas as pd
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
-JSON_PATH    = "Laubmann_35_gemini_edits-new-100.json"
-OUTPUT_EXCEL = "laubmann_index_v9.xlsx"
-OUTPUT_CSV   = "laubmann_index_v9.csv"
+JSON_PATH    = "Laubmann_35_gemini_edits-last.json"
+OUTPUT_EXCEL = "laubmann_index_v12.xlsx"
+OUTPUT_CSV   = "laubmann_index_v12.csv"
 INDEX_START  = "2d6d52f0-b55f-431d-81ac-e2b8ce255fb2_0004_R"
 
 ROMAN_LIST = [
@@ -48,18 +55,18 @@ ROMAN_TO_INT = {r: i+1 for i, r in enumerate(reversed(ROMAN_LIST))}
 
 # EXPLICIT whitelist only — no regex overmatch!
 LATIN_FAMILIES = {
-    'Alaudidae','Anatidae','Ardeidae','Bombycillidae','Certhiidae',
+    'Alaudidae','Anatidae','Ardeidae','Bombycillidae','Certhiidae','Sittidae',
     'Charadriidae','Columbidae','Colymbidae','Corvidae','Falconidae',
     'Fringillidae','Hirundinidae','Laridae','Lanidae','Laniidae',
     'Motacillidae','Muscicapidae','Paridae','Pelecanidae',
-    'Phalacrocoracidae','Phasianidae','Phoenicopteridae','Picidae',
-    'Plegadidae','Procellariidae','Rallidae','Scolopacidae',
-    'Strigidae','Sylviidae','Troglodytidae','Vulturidae',
-    'Accipitridae','Apodidae','Caprimulgidae','Ciconiidae',
-    'Cuculidae','Emberizidae','Gaviidae','Gruidae','Haematopodidae',
+    'Phalacrocoracidae','Mergidae','Phasianidae','Phoenicopteridae','Picidae',
+    'Plegadidae', 'Plataleidae','Procellariidae','Rallidae','Scolopacidae',
+    'Strigidae','Sylviidae','Prunellidae','Troglodytidae','Vulturidae',
+    'Accipitridae','Apodidae','Caprimulgidae','Meropidae','Ciconiidae','Alcedinidae',
+    'Cuculidae','Emberizidae','Gaviidae','Gruidae','Haematopodidae', 'Hierapodidae',
     'Otididae','Passeridae','Podicipedidae','Recurvirostridae',
-    'Sturnidae','Threskiornithidae','Turdidae','Upupidae',
-    'Alcidae','Hierapotidae','Regulidae',
+    'Sturnidae','Threskiornithidae','Turdidae','Upupidae','Coraciidae',
+    'Alcidae','Hierapotidae','Regulidae','Columbidae','Phasianidae','Tetraonidae','Orialidae'
 }
 
 # ── TOKEN EXTRACTION ──────────────────────────────────────────────────────────
@@ -216,6 +223,16 @@ def first_nonempty(series):
         if v: return v
     return ''
 
+def page_sort_key(page_key):
+    """Sort page keys by numeric id and then by side (L before R)."""
+    m = re.search(r'_(\d+)_([LR])$', page_key)
+    if not m:
+        return (10**9, 2, page_key)
+    page_no = int(m.group(1))
+    side = m.group(2)
+    side_rank = 0 if side == 'L' else 1
+    return (page_no, side_rank, page_key)
+
 # ── MAIN ──────────────────────────────────────────────────────────────────────
 def main():
     json_file = Path(sys.argv[1]) if len(sys.argv) > 1 else Path(JSON_PATH)
@@ -231,7 +248,7 @@ def main():
     except ValueError:
         print("Warnung: Start-Key nicht gefunden.")
         start_idx = 0
-    index_keys = all_keys[start_idx:]
+    index_keys = sorted(all_keys[start_idx:], key=page_sort_key)
     print(f"Verarbeite {len(index_keys)} Index-Seiten …")
 
     raw_records = []
@@ -270,7 +287,8 @@ def main():
         .rename(columns={'_page': 'Source Page(s)'})
     )
 
-    df = df.sort_values(['Family (Latin)', 'Bird Name (German)']).reset_index(drop=True)
+    # Keep first-occurrence order from the source stream.
+    df = df.reset_index(drop=True)
     df.index += 1
 
     print(f"Eindeutige Arten: {len(df)}\n")
