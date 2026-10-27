@@ -186,42 +186,59 @@ def main():
             df[c] = ""
 
     max_hits_used = 0
+    stats = {
+        "total_reference_pairs": 0,
+        "successful_matches": 0,
+        "missed_matches": 0,
+        "exact_matches": 0,
+        "fuzzy_matches": 0,
+        "rows_with_any_match": 0,
+        "rows_without_match": 0,
+    }
 
     for ridx, row in df.iterrows():
         bird = str(row.get(bird_col, "")).strip()
         refs = row.get("References", "")
         ref_pairs = parse_all_references(refs)
-
         row_hits = []
         debug_parts = []
+        row_success = False
 
         if not ref_pairs:
             row_hits.append("<not-found!>")
             debug_parts.append("no-refs")
+            stats["missed_matches"] += 1
+            stats["total_reference_pairs"] += 1
+            stats["rows_without_match"] += 1
         else:
             for roman, p in ref_pairs:
+                stats["total_reference_pairs"] += 1
                 vol = ROMAN_TO_INT.get(roman)
                 if not vol:
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:bad-roman")
+                    stats["missed_matches"] += 1
                     continue
 
                 page_obj = page_idx.get((vol, p))
                 if not page_obj:
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:page-missing")
+                    stats["missed_matches"] += 1
                     continue
 
                 entries = extract_u_entries(page_obj["text"])
                 if not entries:
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:no-u-entries")
+                    stats["missed_matches"] += 1
                     continue
 
                 best, score = find_best_entry(entries, bird)
                 if not best or score < FUZZY_THRESHOLD:
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:no-match({score:.2f})")
+                    stats["missed_matches"] += 1
                     continue
 
                 matched_name, rhs = best
@@ -229,7 +246,15 @@ def main():
                 if not nums:
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:no-positions")
+                    stats["missed_matches"] += 1
                     continue
+
+                row_success = True
+                stats["successful_matches"] += 1
+                if abs(score - 1.0) < 1e-9:
+                    stats["exact_matches"] += 1
+                else:
+                    stats["fuzzy_matches"] += 1
 
                 # Für jede lokale Position eigener Hit
                 for n in nums:
@@ -238,6 +263,11 @@ def main():
                 debug_parts.append(
                     f"{roman},{p}:ok->{matched_name}({score:.2f})[{len(nums)}]"
                 )
+
+        if row_success:
+            stats["rows_with_any_match"] += 1
+        elif ref_pairs:
+            stats["rows_without_match"] += 1
 
         # dynamisch Spalten erweitern
         if len(row_hits) > INITIAL_HIT_COLS:
@@ -259,13 +289,52 @@ def main():
     if drop:
         df = df.drop(columns=drop)
 
+    stats_df = pd.DataFrame([
+        {
+            "metric": "total_reference_pairs",
+            "value": stats["total_reference_pairs"],
+        },
+        {
+            "metric": "successful_matches",
+            "value": stats["successful_matches"],
+        },
+        {
+            "metric": "missed_matches",
+            "value": stats["missed_matches"],
+        },
+        {
+            "metric": "exact_matches",
+            "value": stats["exact_matches"],
+        },
+        {
+            "metric": "fuzzy_matches",
+            "value": stats["fuzzy_matches"],
+        },
+        {
+            "metric": "rows_with_any_match",
+            "value": stats["rows_with_any_match"],
+        },
+        {
+            "metric": "rows_without_match",
+            "value": stats["rows_without_match"],
+        },
+        {
+            "metric": "success_rate_percent",
+            "value": round((stats["successful_matches"] / stats["total_reference_pairs"]) * 100, 2) if stats["total_reference_pairs"] else 0.0,
+        },
+    ])
+
     with pd.ExcelWriter(EXCEL_OUT, engine="openpyxl") as w:
         df.to_excel(w, sheet_name=SHEET_NAME, index=False)
+        stats_df.to_excel(w, sheet_name="Corpus_Stats", index=False)
 
     df.to_csv(CSV_OUT, index=False, encoding="utf-8-sig")
 
     print(f"Fertig: {EXCEL_OUT}")
     print(f"Fertig: {CSV_OUT}")
+    print("Statistik:")
+    for _, row in stats_df.iterrows():
+        print(f"- {row['metric']}: {row['value']}")
 
 if __name__ == "__main__":
     main()
