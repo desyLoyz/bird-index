@@ -19,8 +19,17 @@ CORPUS_FILE = {
     "json": "corpus.json",
 }.get(CORPUS_SOURCE, "corpus.md")
 
-EXCEL_OUT = Path(EXCEL_IN).with_name(Path(EXCEL_IN).stem + "_" + CORPUS_SOURCE.upper() + "_with_all_corpus_hits.xlsx")
-CSV_OUT = Path(EXCEL_IN).with_name(Path(EXCEL_IN).stem + "_with_all_corpus_hits.csv")
+def build_output_paths(excel_in: str | Path, corpus_source: str, corpus_file: str | Path):
+    excel_path = Path(excel_in)
+    corpus_path = Path(corpus_file)
+    corpus_label = corpus_path.stem
+    if corpus_label.endswith("-edits"):
+        corpus_label = corpus_label[:-len("-edits")]
+    out_stem = f"{excel_path.stem}_{corpus_source.upper()}-{corpus_label}_with_all_corpus_hits"
+    return (
+        excel_path.with_name(out_stem + excel_path.suffix),
+        excel_path.with_name(out_stem + ".csv"),
+    )
 
 FUZZY_THRESHOLD = 0.78
 INITIAL_HIT_COLS = 20
@@ -160,6 +169,8 @@ def main():
         "md": "corpus.md",
         "json": "corpus.json",
     }.get(corpus_source, CORPUS_FILE)
+
+    excel_out, csv_out = build_output_paths(excel_in, corpus_source, corpus_file)
 
     df = pd.read_excel(excel_in, sheet_name=sheet_name)
     pages = load_corpus_pages(Path(corpus_file))
@@ -385,15 +396,15 @@ def main():
         for v in sorted(per_volume_stats.values(), key=lambda x: x["volume"])
     ])
 
-    with pd.ExcelWriter(EXCEL_OUT, engine="openpyxl") as w:
+    with pd.ExcelWriter(excel_out, engine="openpyxl") as w:
         df.to_excel(w, sheet_name=SHEET_NAME, index=False)
         stats_df.to_excel(w, sheet_name="Corpus_Stats", index=False)
         volume_stats_df.to_excel(w, sheet_name="Volume_Stats", index=False)
 
-    df.to_csv(CSV_OUT, index=False, encoding="utf-8-sig")
+    df.to_csv(csv_out, index=False, encoding="utf-8-sig")
 
-    print(f"Fertig: {EXCEL_OUT}")
-    print(f"Fertig: {CSV_OUT}")
+    print(f"Fertig: {excel_out}")
+    print(f"Fertig: {csv_out}")
     print("Statistik:")
     for _, row in stats_df.iterrows():
         print(f"- {row['metric']}: {row['value']}")
