@@ -1,6 +1,8 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
+import argparse
+import json
 import re
 import pandas as pd
 from pathlib import Path
@@ -9,11 +11,15 @@ from difflib import SequenceMatcher
 # =========================
 # KONFIG
 # =========================
-EXCEL_IN = "laubmann_index_v12_nomenclator.xlsx"
+EXCEL_IN = "laubmann_index_v13_ergaenzt_nomenclator.xlsx"
 SHEET_NAME = "Species Index"
-CORPUS_MD = "corpus.md"
+CORPUS_SOURCE = "json"  # "md" or "json"
+CORPUS_FILE = {
+    "md": "corpus.md",
+    "json": "corpus.json",
+}.get(CORPUS_SOURCE, "corpus.md")
 
-EXCEL_OUT = Path(EXCEL_IN).with_name(Path(EXCEL_IN).stem + "_with_all_corpus_hits.xlsx")
+EXCEL_OUT = Path(EXCEL_IN).with_name(Path(EXCEL_IN).stem + "_" + CORPUS_SOURCE.upper() + "_with_all_corpus_hits.xlsx")
 CSV_OUT = Path(EXCEL_IN).with_name(Path(EXCEL_IN).stem + "_with_all_corpus_hits.csv")
 
 FUZZY_THRESHOLD = 0.78
@@ -69,6 +75,44 @@ def split_pages(corpus_text: str):
         })
     return pages
 
+
+def load_corpus_pages(corpus_path: Path):
+    corpus_path = Path(corpus_path)
+    if corpus_path.suffix.lower() == ".json":
+        with corpus_path.open("r", encoding="utf-8") as fh:
+            payload = json.load(fh)
+
+        if not isinstance(payload, list):
+            raise ValueError(f"{corpus_path} does not contain a list of pages.")
+
+        pages = []
+        for item in payload:
+            volume = item.get("volume")
+            page_number = item.get("page_number")
+            if volume is None or page_number in (None, ""):
+                continue
+            text = "\n".join(
+                region.get("text", "")
+                for region in item.get("regions", [])
+                if isinstance(region, dict)
+            )
+            try:
+                page = int(str(page_number).strip().rstrip("."))
+            except ValueError:
+                continue
+            pages.append({
+                "vol": int(volume),
+                "scan": int(item.get("scan", 0) or 0),
+                "page": page,
+                "header": f"Vol. {volume} · scan {item.get('scan', 0) or 0} · p. {page}",
+                "text": text,
+            })
+        return pages
+
+    corpus_text = corpus_path.read_text(encoding="utf-8")
+    return split_pages(corpus_text)
+
+
 def index_pages_by_vol_page(pages):
     return {(p["vol"], p["page"]): p for p in pages}
 
@@ -98,11 +142,27 @@ def find_best_entry(entries, target_name):
 # =========================
 # MAIN
 # =========================
-def main():
-    df = pd.read_excel(EXCEL_IN, sheet_name=SHEET_NAME)
-    corpus_text = Path(CORPUS_MD).read_text(encoding="utf-8")
+def parse_args():
+    parser = argparse.ArgumentParser(description="Add single-volume corpus references to the bird index workbook.")
+    parser.add_argument("--excel-in", default=EXCEL_IN, help="Input Excel workbook path.")
+    parser.add_argument("--sheet-name", default=SHEET_NAME, help="Worksheet name with the species index.")
+    parser.add_argument("--corpus-file", default=CORPUS_FILE, help="Corpus source file: corpus.md or corpus.json.")
+    parser.add_argument("--corpus-source", choices=("md", "json"), help="Corpus source type. Overrides default if set.")
+    return parser.parse_args()
 
-    pages = split_pages(corpus_text)
+
+def main():
+    args = parse_args()
+    excel_in = args.excel_in
+    sheet_name = args.sheet_name
+    corpus_source = args.corpus_source or CORPUS_SOURCE
+    corpus_file = args.corpus_file if args.corpus_file != CORPUS_FILE else {
+        "md": "corpus.md",
+        "json": "corpus.json",
+    }.get(corpus_source, CORPUS_FILE)
+
+    df = pd.read_excel(excel_in, sheet_name=sheet_name)
+    pages = load_corpus_pages(Path(corpus_file))
     page_idx = index_pages_by_vol_page(pages)
 
     # Name-Spalte erkennen
