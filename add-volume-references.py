@@ -195,6 +195,22 @@ def main():
         "rows_with_any_match": 0,
         "rows_without_match": 0,
     }
+    per_volume_stats = {}
+
+    def get_volume_stats(vol):
+        key = str(vol)
+        if key not in per_volume_stats:
+            per_volume_stats[key] = {
+                "volume": vol,
+                "total_reference_pairs": 0,
+                "successful_matches": 0,
+                "missed_matches": 0,
+                "exact_matches": 0,
+                "fuzzy_matches": 0,
+                "rows_with_any_match": 0,
+                "rows_without_match": 0,
+            }
+        return per_volume_stats[key]
 
     for ridx, row in df.iterrows():
         bird = str(row.get(bird_col, "")).strip()
@@ -203,6 +219,7 @@ def main():
         row_hits = []
         debug_parts = []
         row_success = False
+        matched_volumes_in_row = set()
 
         if not ref_pairs:
             row_hits.append("<not-found!>")
@@ -214,10 +231,16 @@ def main():
             for roman, p in ref_pairs:
                 stats["total_reference_pairs"] += 1
                 vol = ROMAN_TO_INT.get(roman)
+                vol_stats = get_volume_stats(vol) if vol else None
+                if vol_stats is not None:
+                    vol_stats["total_reference_pairs"] += 1
+
                 if not vol:
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:bad-roman")
                     stats["missed_matches"] += 1
+                    if vol_stats is not None:
+                        vol_stats["missed_matches"] += 1
                     continue
 
                 page_obj = page_idx.get((vol, p))
@@ -225,6 +248,8 @@ def main():
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:page-missing")
                     stats["missed_matches"] += 1
+                    if vol_stats is not None:
+                        vol_stats["missed_matches"] += 1
                     continue
 
                 entries = extract_u_entries(page_obj["text"])
@@ -232,6 +257,8 @@ def main():
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:no-u-entries")
                     stats["missed_matches"] += 1
+                    if vol_stats is not None:
+                        vol_stats["missed_matches"] += 1
                     continue
 
                 best, score = find_best_entry(entries, bird)
@@ -239,6 +266,8 @@ def main():
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:no-match({score:.2f})")
                     stats["missed_matches"] += 1
+                    if vol_stats is not None:
+                        vol_stats["missed_matches"] += 1
                     continue
 
                 matched_name, rhs = best
@@ -247,14 +276,23 @@ def main():
                     row_hits.append(f"{roman}, <not-found!>")
                     debug_parts.append(f"{roman},{p}:no-positions")
                     stats["missed_matches"] += 1
+                    if vol_stats is not None:
+                        vol_stats["missed_matches"] += 1
                     continue
 
                 row_success = True
+                matched_volumes_in_row.add(vol)
                 stats["successful_matches"] += 1
+                if vol_stats is not None:
+                    vol_stats["successful_matches"] += 1
                 if abs(score - 1.0) < 1e-9:
                     stats["exact_matches"] += 1
+                    if vol_stats is not None:
+                        vol_stats["exact_matches"] += 1
                 else:
                     stats["fuzzy_matches"] += 1
+                    if vol_stats is not None:
+                        vol_stats["fuzzy_matches"] += 1
 
                 # Für jede lokale Position eigener Hit
                 for n in nums:
@@ -266,8 +304,16 @@ def main():
 
         if row_success:
             stats["rows_with_any_match"] += 1
+            for vol in matched_volumes_in_row:
+                vol_stats = get_volume_stats(vol)
+                vol_stats["rows_with_any_match"] += 1
         elif ref_pairs:
             stats["rows_without_match"] += 1
+            for roman, p in ref_pairs:
+                vol = ROMAN_TO_INT.get(roman)
+                if vol:
+                    vol_stats = get_volume_stats(vol)
+                    vol_stats["rows_without_match"] += 1
 
         # dynamisch Spalten erweitern
         if len(row_hits) > INITIAL_HIT_COLS:
@@ -324,9 +370,25 @@ def main():
         },
     ])
 
+    volume_stats_df = pd.DataFrame([
+        {
+            "volume": v["volume"],
+            "total_reference_pairs": v["total_reference_pairs"],
+            "successful_matches": v["successful_matches"],
+            "missed_matches": v["missed_matches"],
+            "exact_matches": v["exact_matches"],
+            "fuzzy_matches": v["fuzzy_matches"],
+            "rows_with_any_match": v["rows_with_any_match"],
+            "rows_without_match": v["rows_without_match"],
+            "success_rate_percent": round((v["successful_matches"] / v["total_reference_pairs"]) * 100, 2) if v["total_reference_pairs"] else 0.0,
+        }
+        for v in sorted(per_volume_stats.values(), key=lambda x: x["volume"])
+    ])
+
     with pd.ExcelWriter(EXCEL_OUT, engine="openpyxl") as w:
         df.to_excel(w, sheet_name=SHEET_NAME, index=False)
         stats_df.to_excel(w, sheet_name="Corpus_Stats", index=False)
+        volume_stats_df.to_excel(w, sheet_name="Volume_Stats", index=False)
 
     df.to_csv(CSV_OUT, index=False, encoding="utf-8-sig")
 
@@ -335,6 +397,8 @@ def main():
     print("Statistik:")
     for _, row in stats_df.iterrows():
         print(f"- {row['metric']}: {row['value']}")
+    print("\nVolume_Stats:")
+    print(volume_stats_df.to_string(index=False))
 
 if __name__ == "__main__":
     main()
