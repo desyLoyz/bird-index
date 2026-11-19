@@ -21,7 +21,7 @@ Fixes gegenüber v6:
 - Inline-Referenzen nach Namen werden erkannt (z.B. <u>Name:</u> I, 161; II, 164)
 - Abschließende Doppelpunkte in Artnamen werden entfernt (Haubenlerche: -> Haubenlerche)
 - Optionaler JSON-Dateipfad per CLI-Argument wird unterstützt
-- Seiten werden in Lesereihenfolge verarbeitet (R vor L)
+- Seiten werden in Lesereihenfolge verarbeitet (L vor R)
 - Endausgabe bleibt in Reihenfolge des ersten Auftretens (keine alphabetische Umsortierung)
 - Original Name wird IMMER befüllt (auch wenn identisch mit edited)
 """
@@ -38,9 +38,9 @@ from pathlib import Path
 import pandas as pd
 
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
-JSON_PATH    = "Laubmann_35_gemini_edits-last.json"
-OUTPUT_EXCEL = "laubmann_index_v12.xlsx"
-OUTPUT_CSV   = "laubmann_index_v12.csv"
+JSON_PATH    = "Laubmann_35_gemini_edits (18).json"
+OUTPUT_EXCEL = "laubmann_index_v14.xlsx"
+OUTPUT_CSV   = "laubmann_index_v14.csv"
 INDEX_START  = "2d6d52f0-b55f-431d-81ac-e2b8ce255fb2_0004_R"
 
 ROMAN_LIST = [

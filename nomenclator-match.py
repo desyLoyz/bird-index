@@ -11,7 +11,7 @@ Aktuelle Merkmale:
 - Familienprüfung als zusätzliches Matching-Kriterium
 - Eigene Spalte `Family Match (Source/Nomenclator)` zur Qualitätskontrolle
 - Matching und Ausgabe basieren auf `Bird Name (German)`; zusätzliche Rohdaten
-  werden als `Raw Entries` mit ausgegeben
+  werden als `Raw Entries` müit ausgegeben
 """
 
 import subprocess, sys
@@ -29,7 +29,7 @@ from rapidfuzz import process, fuzz
 # ── CONFIGURATION ─────────────────────────────────────────────────────────────
 # Standardpfad für die korrigierte XLS-Datei. Das Skript akzeptiert aber auch
 # einen Dateinamen per CLI und verarbeitet automatisch .xls sowie .xlsx.
-DEFAULT_EXCEL_IN = "laubmann_index_v12.xls"
+DEFAULT_EXCEL_IN = "laubmann_index_v14.xlsx"
 FTS_PATH         = "fts.txt"
 MATCH_THRESHOLD  = 70
 
