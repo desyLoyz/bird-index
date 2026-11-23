@@ -1,0 +1,6 @@
+.venv/
+__pycache__/
+runs/
+Laubmann_35_gemini_edits*.json
+laubmann_index_v1*.xlsx
+laubmann_index_v1*.csv
